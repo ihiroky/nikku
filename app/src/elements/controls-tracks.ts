@@ -10,6 +10,7 @@ export class ControlsTracks extends LitElement {
   @property({ type: Number }) count: number = 0;
   /** Whether or not UI is interactable */
   @property({ type: Boolean }) disabled: boolean = false;
+  @property({ type: String }) names: string = '[]';
 
   static styles = css`
     .hidden {
@@ -48,6 +49,7 @@ export class ControlsTracks extends LitElement {
   `;
 
   render() {
+    const n = JSON.parse(this.names) as string[]
     return html`
       <div
         id="container"
@@ -55,7 +57,7 @@ export class ControlsTracks extends LitElement {
           hidden: this.count === 1 || this.disabled,
         })}
       >
-        Active tracks:
+        Active ${ n.length === 0 ? '' : 'File' } tracks:
         <ol id="list">
           ${Array(this.count)
             .fill(0)
@@ -79,7 +81,7 @@ export class ControlsTracks extends LitElement {
                       );
                     }}
                   />
-                  Track ${i + 1}
+                  ${ n.length === 0 ? 'Track' + (i + 1) : n[i] }
                 </label>
               </li>`;
             })}

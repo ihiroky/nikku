@@ -14,9 +14,11 @@ export class NikkuMain extends LitElement {
   @state()
   private playPauseIcon: 'play' | 'pause' = 'play';
   @state()
-  private loop: 'on' | 'off' = 'on';
+  private brstmLoop: 'on' | 'off' = 'on';
   @state()
-  private volume: number = 1;
+  private filesLoop: 'on' | 'off' = 'on';
+  @state()
+  private volume: number = 0.1;
   @state()
   private muted: boolean = false;
   @state()
@@ -28,9 +30,7 @@ export class NikkuMain extends LitElement {
   @state()
   private timeDisplayValue: number = 0;
   @state()
-  private tracksCount: number = 1;
-  @state()
-  private tracksActive: boolean[] = [true];
+  private brstmTracks: { count: number; active: boolean[] } = { count: 1, active: [true] };
   @state()
   private disabled: boolean = true;
   @state()
@@ -39,6 +39,10 @@ export class NikkuMain extends LitElement {
   private trackTitle: string = '';
   @state()
   private errorMessage: string = '';
+  @state()
+  private fileTracks = { count: 0, active: [] as boolean[], names: '[]', files: [] as File[] };
+
+  private fadeOutTimeout: number = 0;
 
   private audioPlayer: AudioPlayer | null = null;
 
@@ -71,8 +75,8 @@ export class NikkuMain extends LitElement {
         <div id="controls-tracks">
           <controls-tracks
             ?disabled=${this.disabled}
-            count=${this.tracksCount}
-            .active=${this.tracksActive}
+            count=${this.brstmTracks.count}
+            .active=${this.brstmTracks.active}
             @tracksActiveChange=${this.#handleTracksActiveChange}
           ></controls-tracks>
         </div>
@@ -96,6 +100,7 @@ export class NikkuMain extends LitElement {
             type="file"
             id="controls-select-file"
             accept=".brstm"
+            multiple="multiple"
             @change=${this.#handleFileInputChange}
           />
           <span id="controls-select-file-custom"></span>
@@ -109,10 +114,17 @@ export class NikkuMain extends LitElement {
           ></controls-play-pause>
         </div>
         <div id="controls-others">
+          brstm:
           <controls-loop
             ?disabled=${this.disabled}
-            mode=${this.loop}
-            @loopClick=${this.#handleLoopClick}
+            mode=${this.brstmLoop}
+            @loopClick=${this.#handleBrstmLoopClick}
+          ></controls-loop>
+          files:
+          <controls-loop
+            ?disabled=${this.disabled}
+            mode=${this.filesLoop}
+            @loopClick=${this.#handleFilesLoopClick}
           ></controls-loop>
           <controls-volume
             ?disabled=${this.disabled}
@@ -121,6 +133,15 @@ export class NikkuMain extends LitElement {
             @mutedChange=${this.#handleMutedChange}
             @volumeChange=${this.#handleVolumeChange}
           ></controls-volume>
+        </div>
+        <div id="controls-file-list">
+          <controls-tracks
+            ?disabled=${this.disabled}
+            count=${this.fileTracks.count}
+            names=${this.fileTracks.names}
+            .active=${this.fileTracks.active}
+            @tracksActiveChange=${this.#handleFileTracksActiveChange}
+          ></controls-tracks>
         </div>
       </main>
       <div
@@ -169,7 +190,8 @@ export class NikkuMain extends LitElement {
         return;
       }
 
-      readFile(file).then(this.#handleFileSelected.bind(this));
+      readFile(file).then(this.#playSingle.bind(this));
+      this.#handleFilesSelected([file])
     });
   }
 
@@ -187,16 +209,46 @@ export class NikkuMain extends LitElement {
       return;
     }
 
-    const file = files[0];
-    readFile(file).then(this.#handleFileSelected.bind(this));
+   this.#handleFilesSelected(Array.from(files));
   }
 
-  async #handleFileSelected({
+  async #handleFilesSelected(files: File[]) {
+    this.fileTracks = {
+      count: files.length,
+      active: new Array(files.length).fill(true),
+      names: JSON.stringify(files.map((file) => file.name)),
+      files: files,
+    }
+
+    let counter = 0;
+    const loop = () => {
+      if (this.filesLoop === 'off' && counter === files.length) {
+        return;
+      }
+      if (this.fileTracks.active.every(a => a === false)) {
+        // Prevent infinite loop
+        return;
+      }
+      const i = counter++ % files.length
+      if (!this.fileTracks.active[i]) {
+        loop();
+        return;
+      }
+      readFile(files[i]).then(fb => {
+        this.#playSingle({ ...fb, onEnded: loop });
+      })
+    };
+    loop();
+  }
+
+  async #playSingle({
     buffer,
     file,
+    onEnded,
   }: {
     buffer: string | ArrayBuffer | null;
     file: File;
+    onEnded?: () => void;
   }) {
     this.#clearError();
 
@@ -211,25 +263,51 @@ export class NikkuMain extends LitElement {
       await this.workerInstance.init(transfer(buffer, [buffer]));
       const metadata = await this.workerInstance.getMetadata();
 
+      if (this.fadeOutTimeout) {
+        clearTimeout(this.fadeOutTimeout)
+        this.fadeOutTimeout = 0;
+      }
+      let loopCount = 0;
+      const maxLoopCount = this.brstmLoop === 'on' ? 4 : 1;
       if (this.audioPlayer) {
         await this.audioPlayer.destroy();
-      } else {
-        this.audioPlayer = new AudioPlayer({
-          onPlay: () => {
-            this.playPauseIcon = 'pause';
-            this.timer.start();
-          },
-          onPause: () => {
-            this.playPauseIcon = 'play';
-            this.timer.stop();
-          },
-          decodeSamples: async (offset: number, size: number) => {
-            const samples =
-              (await this.workerInstance.getSamples(offset, size)) || [];
-            return samples;
-          },
-        });
+        this.audioPlayer = null;
       }
+      this.audioPlayer = new AudioPlayer({
+        onPlay: () => {
+          this.playPauseIcon = 'pause';
+          this.timer.start();
+        },
+        onPause: () => {
+          this.playPauseIcon = 'play';
+          this.timer.stop();
+        },
+        onLoop: () => {
+          if (++loopCount === maxLoopCount) {
+            let volume = this.volume;
+            let delta = volume / 70;
+            const reduceVolume = () => {
+              volume -= delta;
+              if (volume <= 0) {
+                onEnded?.()
+                return
+              }
+              this.audioPlayer?.setVolume(volume);
+              this.fadeOutTimeout = setTimeout(reduceVolume, 100)
+            };
+            reduceVolume();
+          }
+        },
+        onEnd: () => {
+          onEnded?.();
+        },
+        decodeSamples: async (offset: number, size: number) => {
+          const samples =
+            (await this.workerInstance.getSamples(offset, size)) || [];
+          return samples;
+        },
+      });
+
       if (!metadata) {
         throw new Error('metadata is undefined');
       }
@@ -249,12 +327,13 @@ export class NikkuMain extends LitElement {
       this.progressMax = amountTimeInS;
       this.timeDisplayMax = amountTimeInS;
 
-      this.tracksCount = numberTracks;
-      this.tracksActive = new Array(numberTracks)
-        .fill(true)
-        .map((_, i) => (i === 0 ? true : false));
+      this.brstmTracks = {
+        count: numberTracks,
+        active: new Array(numberTracks)
+          .fill(true)
+          .map((_, i) => (i === 0 ? true : false)),
+      }
       this.disabled = false;
-
       this.audioPlayer?.play();
     } catch (e) {
       this.#showError(e as Error);
@@ -263,8 +342,19 @@ export class NikkuMain extends LitElement {
 
   #handleTracksActiveChange(e: CustomEvent) {
     const newActive: Array<boolean> = e.detail.active;
-    this.tracksActive = newActive;
+    this.brstmTracks = {
+      ...this.brstmTracks,
+      active: newActive,
+    };
     this.audioPlayer?.setTrackStates(newActive);
+  }
+
+  #handleFileTracksActiveChange(e: CustomEvent) {
+    const newActive: Array<boolean> = e.detail.active;
+    this.fileTracks = {
+      ...this.fileTracks,
+      active: newActive,
+    };
   }
 
   #handlePlayPauseClick(e: CustomEvent) {
@@ -284,14 +374,19 @@ export class NikkuMain extends LitElement {
     this.audioPlayer?.seek(newProgressValue);
   }
 
-  #handleLoopClick(e: CustomEvent) {
+  #handleBrstmLoopClick(e: CustomEvent) {
     const newLoopMode = e.detail.mode as 'on' | 'off';
-    this.loop = newLoopMode;
+    this.brstmLoop = newLoopMode;
     if (newLoopMode === 'on') {
       this.audioPlayer?.setLoop(true);
     } else if (newLoopMode === 'off') {
       this.audioPlayer?.setLoop(false);
     }
+  }
+
+  #handleFilesLoopClick(e: CustomEvent) {
+    const newLoopMode = e.detail.mode as 'on' | 'off';
+    this.filesLoop = newLoopMode;
   }
 
   #handleMutedChange(e: CustomEvent) {
@@ -400,6 +495,10 @@ export class NikkuMain extends LitElement {
     controls-volume {
       margin-inline-start: 10px;
       height: 40px;
+    }
+    #controls-file-list {
+      grid-column: 1 / span 3;
+      grid-row: 5;
     }
 
     @media (max-width: 640px) {
