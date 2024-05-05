@@ -2,7 +2,15 @@
 
 Web-based BRSTM player
 
-Just open [the demo](https://kenrick95.github.io/nikku/) in modern browser, select a `.brstm` file, and enjoy!
+## How to use
+```bash
+npm install
+cd app
+npm install
+npm run build
+python3 -mhttp.server 8888
+# Then access http://localhost:8888/ with the browser.
+```
 
 ## What Is BRSTM?
 
