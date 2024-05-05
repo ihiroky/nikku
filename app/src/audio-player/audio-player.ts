@@ -5,6 +5,8 @@ import AudioSource from './worklet/audio-source?url';
 export type AudioPlayerOptions = {
   onPlay: () => void;
   onPause: () => void;
+  onLoop: () => void;
+  onEnd: () => void;
   decodeSamples: (offset: number, size: number) => Promise<Float32Array[]>;
 };
 
@@ -194,12 +196,14 @@ export class AudioPlayer {
           switch (ev.data.type) {
             case 'BUFFER_LOOPED': {
               console.log('[AudioPlayer]', ev.data.type);
+              this.options.onLoop()
               break;
             }
             case 'BUFFER_ENDED': {
               console.log('[AudioPlayer]', ev.data.type);
               this.pause();
               this.#hasBufferReachedEnd = true;
+              this.options.onEnd();
               break;
             }
 
